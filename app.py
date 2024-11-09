@@ -9,7 +9,7 @@ import soundfile as sf
 
 # Configuration class
 class Config:
-    GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "your-groq-api-key-here")
+    GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "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")
     WHISPER_MODEL = "base"
     TTS_MODEL = "tts_models/en/ljspeech/tacotron2-DDC"
     SAMPLE_RATE = 16000
