@@ -1,6 +1,6 @@
 gradio==3.0.11
 whisper==1.0.0
 groq==0.11.0
-TTS==0.9.0
+TTS==0.15.0   # Updated to a version that supports Python 3.12
 streamlit==1.20.0
 uvicorn==0.22.0
