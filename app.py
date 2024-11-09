@@ -1,97 +1,190 @@
 import os
 import numpy as np
 import gradio as gr
-from groq import Groq
 import whisper
+from groq import Groq
 from TTS.api import TTS
+import tempfile
+import soundfile as sf
 
-# Set your Groq API key here
-GROQ_API_KEY = "your-groq-api-key-here"  # Replace with your actual API key
-os.environ["GROQ_API_KEY"] = GROQ_API_KEY
+# Configuration class
+class Config:
+    GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "your-groq-api-key-here")
+    WHISPER_MODEL = "base"
+    TTS_MODEL = "tts_models/en/ljspeech/tacotron2-DDC"
+    SAMPLE_RATE = 16000
 
-# Initialize models
-def initialize_models():
-    # Load Whisper model
-    whisper_model = whisper.load_model("base")
-    
-    # Initialize Groq client
-    groq_client = Groq(api_key=GROQ_API_KEY)  # Using the API key directly
-    
-    # Initialize TTS
-    tts = TTS("tts_models/en/ljspeech/tacotron2-DDC")
-    
-    return whisper_model, groq_client, tts
+class VoiceChatbot:
+    def __init__(self):
+        print("Initializing Voice Chatbot...")
+        self.config = Config()
+        self.temp_dir = tempfile.mkdtemp()
+        self.initialize_models()
 
+    def initialize_models(self):
+        """Initialize all required models"""
+        try:
+            # Initialize Whisper
+            print("Loading Whisper model...")
+            self.whisper_model = whisper.load_model(self.config.WHISPER_MODEL)
+            
+            # Initialize Groq
+            print("Initializing Groq client...")
+            self.groq_client = Groq(api_key=self.config.GROQ_API_KEY)
+            
+            # Initialize TTS
+            print("Loading TTS model...")
+            self.tts = TTS(self.config.TTS_MODEL)
+            
+            print("All models initialized successfully!")
+            
+        except Exception as e:
+            print(f"Error initializing models: {e}")
+            raise
 
-# Transcribe audio to text using Whisper
-def transcribe_audio(audio_path, whisper_model):
-    result = whisper_model.transcribe(audio_path)
-    return result["text"]
+    def transcribe_audio(self, audio_path):
+        """Transcribe audio using Whisper"""
+        try:
+            result = self.whisper_model.transcribe(audio_path)
+            return result["text"].strip()
+        except Exception as e:
+            print(f"Transcription error: {e}")
+            raise
 
-# Get response from Groq
-def get_groq_response(client, input_text):
-    chat_completion = client.chat.completions.create(
-        messages=[{
-            "role": "user",
-            "content": input_text,
-        }],
-        model="llama3-8b-8192",
-    )
-    return chat_completion.choices[0].message.content
+    def get_llm_response(self, text):
+        """Get response from Groq"""
+        try:
+            chat_completion = self.groq_client.chat.completions.create(
+                messages=[
+                    {
+                        "role": "system",
+                        "content": "You are a helpful and friendly AI assistant. Keep your responses concise and natural."
+                    },
+                    {
+                        "role": "user",
+                        "content": text
+                    }
+                ],
+                model="llama3-8b-8192",
+                temperature=0.7,
+                max_tokens=150  # Keeping responses concise for better interaction
+            )
+            return chat_completion.choices[0].message.content
+        except Exception as e:
+            print(f"Groq API error: {e}")
+            raise
 
-# Convert text to speech
-def text_to_speech(tts, text, output_path):
-    tts.tts_to_file(text=text, file_path=output_path)
-    return output_path
+    def text_to_speech(self, text):
+        """Convert text to speech"""
+        try:
+            output_path = os.path.join(self.temp_dir, "response.wav")
+            self.tts.tts_to_file(text=text, file_path=output_path)
+            return output_path
+        except Exception as e:
+            print(f"TTS error: {e}")
+            raise
 
-# Main processing function
-def process_audio(audio_input, whisper_model, groq_client, tts):
-    try:
-        # Save input audio temporarily
-        input_path = "input_audio.wav"
-        output_path = "output_audio.wav"
-        
-        # Step 1: Convert speech to text
-        audio_input.save(input_path)  # Use save() method to save the audio file
-        
-        # Step 2: Convert speech to text
-        input_text = transcribe_audio(input_path, whisper_model)
-        
-        # Step 3: Get LLM response
-        response_text = get_groq_response(groq_client, input_text)
-        
-        # Step 4: Convert response to speech
-        audio_output = text_to_speech(tts, response_text, output_path)
-        
-        return audio_output, input_text, response_text
-        
-    except Exception as e:
-        return None, f"Error: {str(e)}", "An error occurred"
+    def process_audio(self, audio_input):
+        """Main processing function"""
+        try:
+            if audio_input is None:
+                return None, "No audio input received.", "Please provide audio input."
 
-# Gradio interface
-def create_interface():
-    whisper_model, groq_client, tts = initialize_models()
-    
-    def wrapper(audio):
-        return process_audio(audio, whisper_model, groq_client, tts)
-    
+            # Save input audio temporarily
+            input_path = os.path.join(self.temp_dir, "input_audio.wav")
+            
+            # Handle audio input
+            if isinstance(audio_input, tuple):
+                audio_data, sample_rate = audio_input
+            else:
+                input_path = audio_input
+                audio_data, sample_rate = sf.read(input_path)
+
+            # Ensure mono audio
+            if len(audio_data.shape) == 2:
+                audio_data = np.mean(audio_data, axis=1)
+
+            # Save processed audio
+            sf.write(input_path, audio_data, sample_rate)
+
+            # Process the audio
+            print("Processing audio...")
+            print("1. Transcribing speech to text...")
+            transcribed_text = self.transcribe_audio(input_path)
+            print(f"Transcribed text: {transcribed_text}")
+
+            print("2. Getting LLM response...")
+            llm_response = self.get_llm_response(transcribed_text)
+            print(f"LLM response: {llm_response}")
+
+            print("3. Converting response to speech...")
+            audio_output = self.text_to_speech(llm_response)
+            print("Processing complete!")
+
+            return audio_output, transcribed_text, llm_response
+
+        except Exception as e:
+            error_message = f"Error processing audio: {str(e)}"
+            print(error_message)
+            return None, error_message, "An error occurred"
+
+def create_demo():
+    """Create and configure the Gradio interface"""
+    chatbot = VoiceChatbot()
+
+    # Wrapper function for Gradio
+    def process_wrapper(audio):
+        return chatbot.process_audio(audio)
+
+    # Create Gradio interface
     interface = gr.Interface(
-        fn=wrapper,
-        inputs=gr.Audio(type="filepath"),  # Corrected back to 'filepath' for Gradio's audio input
-        outputs=[
-            gr.Audio(label="Bot Response"),
-            gr.Textbox(label="Transcribed Input"),
-            gr.Textbox(label="Bot Response Text")
+        fn=process_wrapper,
+        inputs=[
+            gr.Audio(
+                label="Voice Input",
+                type="filepath",
+                sources=["microphone", "upload"]
+            )
         ],
-        title="Voice Chatbot",
-        description="Speak to the chatbot and get voice responses back!",
-        theme="default"
+        outputs=[
+            gr.Audio(label="AI Response"),
+            gr.Textbox(label="Transcribed Input"),
+            gr.Textbox(label="AI Response Text")
+        ],
+        title="Real-time Voice Chatbot",
+        description="""
+        Speak or upload an audio file to chat with the AI assistant.
+        The assistant will respond with voice and text.
+        """,
+        article="""
+        How to use:
+        1. Click the microphone icon to record your voice
+        2. Speak clearly into your microphone
+        3. Stop recording when finished
+        4. Wait for the AI to process and respond
+        5. Listen to the AI's voice response
+        
+        You can also upload pre-recorded audio files.
+        """,
+        examples=[],
+        cache_examples=False
     )
-    
+
     return interface
 
-# For Google Colab and Hugging Face deployment
-if __name__ == "__main__":
-    # Create and launch the interface
-    demo = create_interface()
+# For Google Colab
+def launch_in_colab():
+    demo = create_demo()
+    demo.launch(debug=True, share=True)
+
+# For Hugging Face Spaces
+def launch_in_hf():
+    demo = create_demo()
     demo.launch()
+
+if __name__ == "__main__":
+    import sys
+    if 'google.colab' in sys.modules:
+        launch_in_colab()
+    else:
+        launch_in_hf()
